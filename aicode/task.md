@@ -15,7 +15,7 @@
 *   **任务描述**: 实现基础数据结构，如 `GameHistory` 用于存储单局游戏信息，`TrainingBatch` 用于封装训练数据。参考 <mcfile name="design_structure.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_structure.md"></mcfile> 中 ReplayBuffer 部分的数据模型。
 *   **涉及类**: `GameHistory`, `TrainingBatch` (或其他类似的数据容器)
 *   **完成目标**: 规范化组件间数据流转的格式。
-*   **当前状态**: 未开始
+*   **当前状态**: 已完成
 
 ### 3. 游戏环境接口与实现
 
