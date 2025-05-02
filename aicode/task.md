@@ -22,7 +22,7 @@
 *   **任务描述**: 定义 `Game` 抽象基类接口（包含 `reset`, `step`, `legal_actions`, `to_play` 等），并至少实现一个具体游戏环境的封装。参考 <mcfile name="design_interface.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_interface.md"></mcfile> 和 <mcfile name="design_structure.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_structure.md"></mcfile> 中 Game 部分。
 *   **涉及类**: `Game` (ABC), 具体游戏实现类 (例如 `TicTacToeGame`)
 *   **完成目标**: 使算法能够与标准化的游戏环境交互。
-*   **当前状态**: 未开始
+*   **当前状态**: 已完成
 
 ### 4. 神经网络模型实现
 
