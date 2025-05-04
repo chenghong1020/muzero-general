@@ -29,13 +29,18 @@ class MuZeroNetwork(nn.Module):
         # 注意：这里假设观察是图像类数据，需要扁平化。如果观察是一维向量，则不需要 * obs_shape[1] * obs_shape[2]
         # 同时考虑堆叠帧数
         # TODO: 需要根据实际 observation_shape 调整输入大小计算方式
-        if len(obs_shape) == 3: # 假设是图像类 (C, H, W)
-             # 如果 stacked_observations > 0, 输入通道数是 (stacked_observations + 1) * C
-             # 否则是 C
-             input_c = (config.stacked_observations + 1) * obs_channels if config.stacked_observations > 0 else obs_channels
-             representation_input_size = input_c * obs_shape[1] * obs_shape[2]
-        elif len(obs_shape) == 1: # 假设是一维向量
-             representation_input_size = (config.stacked_observations + 1) * obs_shape[0] if config.stacked_observations > 0 else obs_shape[0]
+        if len(obs_shape) == 3: # 图像类 (C, H, W)
+            # 观测通道数 C' = (k + 1) * C
+            # 动作编码为 k 个 1 x H x W 的平面
+            total_channels = (config.stacked_observations + 1) * obs_channels + config.stacked_observations
+            representation_input_size = total_channels * obs_shape[1] * obs_shape[2]
+        elif len(obs_shape) == 1: # 一维向量
+            # 观测特征维度
+            obs_dim = (config.stacked_observations + 1) * obs_shape[0]
+            # 动作编码维度 (k个one-hot向量)
+            action_dim = config.stacked_observations * config.action_space_size if config.stacked_observations > 0 else 0
+            # 总输入维度
+            representation_input_size = obs_dim + action_dim
         else: # 其他情况，需要用户定义
              raise ValueError(f"Unsupported observation shape format: {obs_shape}")
 
@@ -47,6 +52,8 @@ class MuZeroNetwork(nn.Module):
                 config.encoding_size
             )
         )
+
+        self.representation_norm = nn.LayerNorm(config.encoding_size, eps=1e-5)
 
         # --- 2. 动态网络 (Dynamics Network) g ---
         # 输入: 编码状态 (encoded_state) + 动作 (action)
@@ -69,6 +76,9 @@ class MuZeroNetwork(nn.Module):
             )
         )
 
+        # 动态网络的 LayerNorm
+        self.dynamics_norm = nn.LayerNorm(config.encoding_size, eps=1e-5)
+        
         # --- 3. 预测网络 (Prediction Network) f ---
         # 输入: 编码状态 (encoded_state)
         # 输出: 策略 (policy_logits) + 价值 (value)
@@ -102,17 +112,10 @@ class MuZeroNetwork(nn.Module):
         batch_size = observation.shape[0]
         flat_observation = observation.view(batch_size, -1)
         encoded_state = self.representation_network(flat_observation)
-
-        # 归一化编码状态到 [0, 1] 区间 (可选，但有助于稳定训练)
-        # min_val = encoded_state.min(-1, keepdim=True)[0]
-        # max_val = encoded_state.max(-1, keepdim=True)[0]
-        # 防止除以零
-        # scale = max_val - min_val
-        # scale[scale < 1e-5] += 1e-5
-        # normalized_state = (encoded_state - min_val) / scale
-        # return normalized_state
-        # 暂时不加归一化，后续根据训练效果决定
-        return encoded_state
+        
+        # 直接使用已创建的 LayerNorm
+        normalized_state = self.representation_norm(encoded_state)
+        return normalized_state
 
 
     def dynamics(self, encoded_state: torch.Tensor, action: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -128,21 +131,14 @@ class MuZeroNetwork(nn.Module):
         # 将状态和动作拼接
         state_action = torch.cat((encoded_state, action), dim=1)
         next_encoded_state = self.dynamics_state_network(state_action)
-
-        # 归一化下一状态 (可选)
-        # min_val = next_encoded_state.min(-1, keepdim=True)[0]
-        # max_val = next_encoded_state.max(-1, keepdim=True)[0]
-        # scale = max_val - min_val
-        # scale[scale < 1e-5] += 1e-5
-        # normalized_next_state = (next_encoded_state - min_val) / scale
-
-        # 预测奖励 (只依赖于下一状态)
-        # reward_logits = self.dynamics_reward_network(normalized_next_state)
-        # 暂时不加归一化
-        reward_logits = self.dynamics_reward_network(next_encoded_state)
-
-        # return normalized_next_state, reward_logits
-        return next_encoded_state, reward_logits
+        
+        # 使用 LayerNorm 进行归一化
+        normalized_next_state = self.dynamics_norm(next_encoded_state)
+        
+        # 使用归一化后的状态预测奖励
+        reward_logits = self.dynamics_reward_network(normalized_next_state)
+        
+        return normalized_next_state, reward_logits
 
     def prediction(self, encoded_state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -237,3 +233,25 @@ class MuZeroNetwork(nn.Module):
     def set_weights(self, weights):
         """从 SharedStorage 加载模型权重。"""
         self.load_state_dict(weights)
+
+
+    def select_action(policy_logits: torch.Tensor, training: bool = True) -> torch.Tensor:
+        """
+        从策略logits中选择动作。
+        Args:
+            policy_logits: 策略网络输出的logits，形状 (batch_size, action_space_size)
+            training: 是否处于训练模式
+        Returns:
+            选择的动作索引，形状 (batch_size, 1)
+        """
+        # 将logits转换为概率分布
+        action_probs = F.softmax(policy_logits, dim=1)
+        
+        if training:
+            # 训练时使用概率采样以保持探索
+            action = torch.multinomial(action_probs, num_samples=1)
+        else:
+            # 评估时选择最优动作
+            action = torch.argmax(action_probs, dim=1, keepdim=True)
+        
+        return action
