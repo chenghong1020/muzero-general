@@ -205,26 +205,40 @@ self.representation_network = torch.nn.DataParallel(
         encoding_size,  # 输出维度
     )
 )
-- 输入 : 观察 [batch_size, H*W*C*(stacked_observations+1)]
-- 输出 : 编码状态 [batch_size, encoding_size]
+- 输入 : 扁平化的观察历史 (Batch, input_dim)
+- input_dim 的计算方式取决于 observation_shape (来自 config ) 和 stacked_observations (来自 config ):
+  - 图像类 observation_shape = (C, H, W) :
+    - 堆叠 k = stacked_observations 个历史观测和动作。
+    - 观测通道数 C' = (k + 1) * C 。
+    - 动作编码为 k 个 1 x H x W 的平面 (根据 design_model.md FC 部分的描述)。
+    - 总通道数 = C' + k = (stacked_observations + 1) * C + stacked_observations 。
+    - input_dim = ((stacked_observations + 1) * C + stacked_observations) * H * W 。
+  - 向量类 observation_shape = (D,) :
+    - 堆叠 k = stacked_observations 个历史观测和动作。
+    - 观测特征维度 D' = (k + 1) * D 。
+    - 动作编码为 k 个 one-hot 向量 (维度 action_space_size )。
+    - input_dim = (stacked_observations + 1) * D + stacked_observations * action_space_size 。
 
-- 动态网络
+- 输出 : 编码状态 (Batch, encoding_size) (已归一化)
+
+- 动态网络 (Dynamics Network `g`)
 self.dynamics_encoded_state_network = torch.nn.DataParallel(
     mlp(
-        encoding_size + action_space_size,  # 状态和动作拼接
-        fc_dynamics_layers,  # 隐藏层配置
-        encoding_size,  # 输出维度
+        encoding_size + action_space_size,  # 状态和 one-hot 动作拼接
+        fc_dynamics_layers,                 # 隐藏层配置
+        encoding_size,                      # 输出维度 (下一状态，实验当前推荐不做归一化)
     )
 )
 self.dynamics_reward_network = torch.nn.DataParallel(
+    # 注意：输入是 dynamics_encoded_state_network 输出的 *未归一化* 的下一状态
     mlp(encoding_size, fc_reward_layers, full_support_size)
 )
-- 输入 : 
--- 编码状态 [batch_size, encoding_size]
--- 动作 [batch_size, action_space_size]
+- 输入 :
+-- 编码状态 `(Batch, encoding_size)`
+-- 动作 (one-hot) `(Batch, action_space_size)`
 - 输出 :
--- 下一状态 [batch_size, encoding_size]
--- 奖励 [batch_size, full_support_size]
+-- 下一状态 `(Batch, encoding_size)` (已归一化)
+-- 奖励支持向量 (Reward Support) `(Batch, full_support_size)`
 
 - 预测网络
 self.prediction_policy_network = torch.nn.DataParallel(
@@ -234,14 +248,16 @@ self.prediction_value_network = torch.nn.DataParallel(
     mlp(encoding_size, fc_value_layers, full_support_size)
 )
 - 输入 : 编码状态 [batch_size, encoding_size]
+-- 在初始推理 (Initial Inference) 时 : 预测网络的输入是 表征网络 ( h ) 输出的编码状态。
+-- 在循环推理 (Recurrent Inference) 时 (MCTS 内部) : 预测网络的输入是 动态网络 ( g ) 输出的 下一编码状态
 - 输出 :
 -- 策略 [batch_size, action_space_size]
 -- 价值 [batch_size, full_support_size]
 
 #### 保持训练稳定性
-- 将编码状态归一化到[0,1]区间，提高训练稳定性
-- 使用分类方式表示价值和奖励
-- torch.nn.DataParallel  # 所有网络都支持数据并行
+- 将编码状态 (表征网络输出和动态网络输出的下一状态) 归一化到 `[0, 1]` 区间，提高训练稳定性。
+- 使用分类方式 (Support) 表示价值和奖励。
+- `torch.nn.DataParallel` # 所有网络都支持数据并行。
 
 #### 推理
 - 初始推理
