@@ -44,13 +44,11 @@ class MuZeroNetwork(nn.Module):
         else: # 其他情况，需要用户定义
              raise ValueError(f"Unsupported observation shape format: {obs_shape}")
 
-        # 使用 utils 中的 mlp 构建器
-        self.representation_network = nn.DataParallel(
-            mlp(
-                representation_input_size,
-                config.fc_representation_layers,
-                config.encoding_size
-            )
+        # 使用 utils 中的 mlp 构建器，移除 DataParallel
+        self.representation_network = mlp(
+            representation_input_size,
+            config.fc_representation_layers,
+            config.encoding_size
         )
 
         self.representation_norm = nn.LayerNorm(config.encoding_size, eps=1e-5)
@@ -60,21 +58,18 @@ class MuZeroNetwork(nn.Module):
         # 输出: 下一编码状态 (next_encoded_state) + 奖励 (reward)
         # 动作需要进行 one-hot 编码
         dynamics_input_size = config.encoding_size + config.action_space_size
-        self.dynamics_state_network = nn.DataParallel(
-            mlp(
+        
+        self.dynamics_state_network = mlp(
                 dynamics_input_size,
                 config.fc_dynamics_layers,
                 config.encoding_size
             )
-        )
         # 奖励预测输出维度是 full_support_size
-        self.dynamics_reward_network = nn.DataParallel(
-            mlp(
+        self.dynamics_reward_network = mlp(
                 config.encoding_size, # 论文中奖励只依赖于状态 s'
                 config.fc_reward_layers,
                 self.full_support_size
             )
-        )
 
         # 动态网络的 LayerNorm
         self.dynamics_norm = nn.LayerNorm(config.encoding_size, eps=1e-5)
@@ -82,21 +77,18 @@ class MuZeroNetwork(nn.Module):
         # --- 3. 预测网络 (Prediction Network) f ---
         # 输入: 编码状态 (encoded_state)
         # 输出: 策略 (policy_logits) + 价值 (value)
-        self.prediction_policy_network = nn.DataParallel(
-            mlp(
+        self.prediction_policy_network = mlp(
                 config.encoding_size,
                 config.fc_policy_layers,
                 config.action_space_size
             )
-        )
+
         # 价值预测输出维度是 full_support_size
-        self.prediction_value_network = nn.DataParallel(
-            mlp(
+        self.prediction_value_network = mlp(
                 config.encoding_size,
                 config.fc_value_layers,
                 self.full_support_size
             )
-        )
 
     def representation(self, observation: torch.Tensor) -> torch.Tensor:
         """

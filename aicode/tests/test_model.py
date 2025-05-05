@@ -37,7 +37,7 @@ def muzero_config():
         fc_value_layers=[32],
         fc_policy_layers=[32],
         support_size=5,              # 价值/奖励范围 [-5, 5]
-        stacked_observations=0       # 井字棋不需要堆叠
+        stacked_observations=1
     )
 
 @pytest.fixture(scope="module")
@@ -60,9 +60,29 @@ def batch_size():
 
 @pytest.fixture
 def initial_observation(muzero_config, batch_size, device):
-    """Pytest fixture for initial observation tensor."""
+    """
+    Pytest fixture for initial observation tensor.
+    支持两种情况：
+    1. 图像输入 (C, H, W)
+    2. 一维张量输入 (D,)
+    """
     obs_shape = muzero_config.observation_shape
-    return torch.randn(batch_size, obs_shape[0], obs_shape[1], obs_shape[2]).to(device)
+    if len(obs_shape) == 3:  # 图像输入 (C, H, W)
+        # 计算总通道数：(堆叠帧数 + 1) * 原始通道数 + 堆叠帧数（用于动作编码）
+        total_channels = (muzero_config.stacked_observations + 1) * obs_shape[0] + muzero_config.stacked_observations
+        # 创建随机观测，形状为 (batch_size, total_channels, H, W)
+        observation = torch.randn(batch_size, total_channels, obs_shape[1], obs_shape[2]).to(device)
+    elif len(obs_shape) == 1:  # 一维张量输入 (D,)
+        # 计算总特征维度：观测维度 + 动作编码维度
+        obs_dim = (muzero_config.stacked_observations + 1) * obs_shape[0]
+        action_dim = muzero_config.stacked_observations * muzero_config.action_space_size if muzero_config.stacked_observations > 0 else 0
+        total_dim = obs_dim + action_dim
+        # 创建随机观测，形状为 (batch_size, total_dim)
+        observation = torch.randn(batch_size, total_dim).to(device)
+    else:
+        raise ValueError(f"Unsupported observation shape format: {obs_shape}")
+    
+    return observation
 
 def test_initial_inference(muzero_model, muzero_config, initial_observation, batch_size, device):
     """测试 initial_inference 方法"""
@@ -107,6 +127,87 @@ def test_recurrent_inference(muzero_model, muzero_config, initial_observation, b
     full_support_size = 2 * muzero_config.support_size + 1 if muzero_config.support_size > 0 else 1
     assert recurrent_output['encoded_state'].shape == (batch_size, muzero_config.encoding_size)
     assert recurrent_output['policy_logits'].shape == (batch_size, muzero_config.action_space_size)
+    assert recurrent_output['value'].shape == (batch_size, 1)
+    assert recurrent_output['value_logits'].shape == (batch_size, full_support_size)
+    assert recurrent_output['reward'].shape == (batch_size, 1)
+    assert recurrent_output['reward_logits'].shape == (batch_size, full_support_size)
+
+@pytest.fixture(scope="module")
+def muzero_config_1d():
+    """Pytest fixture for MuZeroConfig with 1D vector input."""
+    return MuZeroConfig(
+        action_space_size=4,         # 例如：简单离散动作空间
+        observation_shape=(16,),     # 一维向量输入
+        encoding_size=32,
+        fc_representation_layers=[64],
+        fc_dynamics_layers=[64],
+        fc_reward_layers=[32],
+        fc_value_layers=[32],
+        fc_policy_layers=[32],
+        support_size=5,              # 价值/奖励范围 [-5, 5]
+        stacked_observations=2       # 堆叠2帧
+    )
+
+@pytest.fixture(scope="module")
+def muzero_model_1d(muzero_config_1d, device):
+    """Pytest fixture for MuZeroNetwork model with 1D input."""
+    model = MuZeroNetwork(muzero_config_1d)
+    model.to(device)
+    model.eval()
+    return model
+
+@pytest.fixture
+def initial_observation_1d(muzero_config_1d, batch_size, device):
+    """Pytest fixture for initial observation tensor with 1D input."""
+    obs_shape = muzero_config_1d.observation_shape
+    # 计算总特征维度：观测维度 + 动作编码维度
+    obs_dim = (muzero_config_1d.stacked_observations + 1) * obs_shape[0]
+    action_dim = muzero_config_1d.stacked_observations * muzero_config_1d.action_space_size
+    total_dim = obs_dim + action_dim
+    # 创建随机观测，形状为 (batch_size, total_dim)
+    observation = torch.randn(batch_size, total_dim).to(device)
+    return observation
+
+def test_initial_inference_1d(muzero_model_1d, muzero_config_1d, initial_observation_1d, batch_size, device):
+    """测试一维向量输入的 initial_inference 方法"""
+    with torch.no_grad():
+        initial_output = muzero_model_1d.initial_inference(initial_observation_1d)
+
+    # 检查输出字典的键
+    expected_keys = {"value", "value_logits", "reward", "reward_logits", "policy_logits", "encoded_state"}
+    assert set(initial_output.keys()) == expected_keys
+
+    # 检查输出张量的形状
+    full_support_size = 2 * muzero_config_1d.support_size + 1
+    assert initial_output['encoded_state'].shape == (batch_size, muzero_config_1d.encoding_size)
+    assert initial_output['policy_logits'].shape == (batch_size, muzero_config_1d.action_space_size)
+    assert initial_output['value'].shape == (batch_size, 1)
+    assert initial_output['value_logits'].shape == (batch_size, full_support_size)
+    assert initial_output['reward'].shape == (batch_size, 1)
+    assert initial_output['reward_logits'].shape == (batch_size, full_support_size)
+
+    # 检查初始奖励是否为 0
+    assert torch.allclose(initial_output['reward'], torch.zeros_like(initial_output['reward']))
+
+def test_recurrent_inference_1d(muzero_model_1d, muzero_config_1d, initial_observation_1d, batch_size, device):
+    """测试一维向量输入的 recurrent_inference 方法"""
+    with torch.no_grad():
+        initial_output = muzero_model_1d.initial_inference(initial_observation_1d)
+        current_encoded_state = initial_output['encoded_state']
+
+        # 随机选择一个动作
+        action = torch.randint(0, muzero_config_1d.action_space_size, (batch_size, 1)).to(device)
+
+        recurrent_output = muzero_model_1d.recurrent_inference(current_encoded_state, action)
+
+    # 检查输出字典的键
+    expected_keys = {"value", "value_logits", "reward", "reward_logits", "policy_logits", "encoded_state"}
+    assert set(recurrent_output.keys()) == expected_keys
+
+    # 检查输出张量的形状
+    full_support_size = 2 * muzero_config_1d.support_size + 1
+    assert recurrent_output['encoded_state'].shape == (batch_size, muzero_config_1d.encoding_size)
+    assert recurrent_output['policy_logits'].shape == (batch_size, muzero_config_1d.action_space_size)
     assert recurrent_output['value'].shape == (batch_size, 1)
     assert recurrent_output['value_logits'].shape == (batch_size, full_support_size)
     assert recurrent_output['reward'].shape == (batch_size, 1)
