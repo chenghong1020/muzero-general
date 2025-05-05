@@ -29,7 +29,7 @@
 *   **任务描述**: 实现 `MuZeroNetwork` 类，包含表征网络 (Representation)、动态网络 (Dynamics) 和预测网络 (Prediction)。实现 `initial_inference` 和 `recurrent_inference` 方法。参考 <mcfile name="design_structure.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_structure.md"></mcfile> 中 Model 部分和 <mcfile name="design_interface.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_interface.md"></mcfile>。
 *   **涉及类**: `MuZeroNetwork`
 *   **完成目标**: 构建能够学习和预测游戏状态、价值、奖励和策略的核心模型。
-*   **当前状态**: 未开始
+*   **当前状态**: 已完成
 
 ### 5. MCTS 算法实现
 
