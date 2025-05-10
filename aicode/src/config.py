@@ -3,6 +3,9 @@ from typing import List, Optional, Tuple
 
 class MuZeroConfig:
     def __init__(self,
+                # -- 游戏相关 --
+                is_two_player_game: bool = False, # 是否为双人回合制游戏
+
                  # --- 游戏环境相关 ---
                  seed: int = 0,
                  action_space_size: int = 0, # 需要根据具体游戏设置
@@ -59,6 +62,9 @@ class MuZeroConfig:
                  results_path: str = "./results",          # 结果保存路径
                  ):
 
+        # --- 游戏相关 ---
+        self.is_two_player_game = is_two_player_game
+        
         # --- 游戏环境 ---
         self.seed = seed
         self.action_space_size = action_space_size
