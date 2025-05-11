@@ -36,7 +36,7 @@
 *   **任务描述**: 实现蒙特卡洛树搜索逻辑。包括 `Node` 节点类、`MinMaxStats` 值归一化工具，以及 MCTS 的核心搜索循环（选择、扩展、反向传播）。参考 <mcfile name="design_MCTS.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_MCTS.md"></mcfile>。
 *   **涉及类/函数**: `Node`, `MinMaxStats`, `run_mcts` (或类似 MCTS 主函数)
 *   **完成目标**: 实现 MuZero 的规划模块，用于在自博弈中选择动作。
-*   **当前状态**: 未开始
+*   **当前状态**: 已完成
 
 ### 6. 回放缓冲区 (Replay Buffer) 实现
 
