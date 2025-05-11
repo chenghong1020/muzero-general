@@ -12,7 +12,8 @@ project_root = os.path.abspath(os.path.join(script_dir, '..', 'src'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from mcts import Node, MinMaxStats, select_child, ucb_score, backpropagate
+from mcts import *
+from game import Game, TicTacToeGame
 from config import MuZeroConfig
 
 class TestNode:
@@ -719,3 +720,307 @@ def test_normalize_value():
     assert min_max_stats.normalize(0.0) == 0.5, "中间值应该归一化为0.5"
     assert min_max_stats.normalize(-0.5) == 0.25, "归一化计算错误"
     assert min_max_stats.normalize(0.5) == 0.75, "归一化计算错误"
+
+
+def test_expand():
+    """测试节点扩展方法"""
+    # 创建配置
+    config = MuZeroConfig(
+        action_space_size=9,
+        discount=0.99,
+        root_dirichlet_alpha=0.3,
+        num_simulations=50,
+        batch_size=512,
+        td_steps=10,
+        num_actors=1,
+        lr_init=0.05,
+        lr_decay_steps=1000,
+        is_two_player_game=True,  # 测试双人游戏情况
+        pb_c_base=19652,
+        pb_c_init=1.25,
+        temperature_threshold=None
+    )
+    
+    # 创建节点
+    node = Node(prior=0.5, to_play=1)
+    
+    # 准备扩展参数
+    actions = [0, 1, 2]  # 可用动作
+    to_play = 1  # 当前玩家
+    reward = 0.5  # 奖励
+    
+    # 创建策略 logits
+    # 使用非均匀分布来测试 softmax 转换
+    policy_logits = torch.tensor([[2.0, 1.0, 0.5]])  # 对应动作 0, 1, 2 的 logits
+    
+    # 创建隐藏状态
+    hidden_state = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+    
+    # 扩展节点
+    node.expand(actions, to_play, reward, policy_logits, hidden_state, config)
+    
+    # 验证节点状态是否正确更新
+    assert node.to_play == to_play
+    assert node.reward == reward
+    assert torch.equal(node.hidden_state, hidden_state)
+    
+    # 验证是否为所有动作创建了子节点
+    assert len(node.children) == len(actions)
+    for action in actions:
+        assert action in node.children
+    
+    # 计算期望的策略概率
+    policy_probs = torch.softmax(policy_logits, dim=1).squeeze(0).cpu().numpy()
+    
+    # 验证子节点的先验概率是否正确
+    for i, action in enumerate(actions):
+        assert abs(node.children[action].prior - policy_probs[i]) < 1e-6
+    
+    # 验证子节点的 to_play 是否正确（在双人游戏中应该是对手）
+    for action in actions:
+        assert node.children[action].to_play == -to_play
+    
+    # 测试单人游戏情况
+    config.is_two_player_game = False
+    config.next_player_fn = config.create_next_player_fn()
+    node_single = Node(prior=0.5, to_play=1)
+    node_single.expand(actions, to_play, reward, policy_logits, hidden_state, config)
+    
+    # 在单人游戏中，to_play 应该保持不变
+    for action in actions:
+        assert node_single.children[action].to_play == to_play
+
+
+def test_select_action():
+    """测试根据访问次数选择动作"""
+    config = MuZeroConfig(
+        action_space_size=9,
+        discount=0.99,
+        root_dirichlet_alpha=0.3,
+        num_simulations=50,
+        batch_size=512,
+        td_steps=10,
+        num_actors=1,
+        lr_init=0.05,
+        lr_decay_steps=1000,
+        is_two_player_game=True,
+        pb_c_base=19652,
+        pb_c_init=1.25,
+        temperature_threshold=10  # 设置温度阈值为10，使得前10步使用温度1.0，之后使用0.0
+    )
+    
+    # 创建根节点
+    root = Node(prior=1.0, to_play=1)
+    
+    # 添加三个子节点，模拟不同的访问次数
+    root.children[0] = Node(prior=0.5, to_play=-1)
+    root.children[0].visit_count = 10  # 访问次数最高
+    
+    root.children[1] = Node(prior=0.3, to_play=-1)
+    root.children[1].visit_count = 5
+    
+    root.children[2] = Node(prior=0.2, to_play=-1)
+    root.children[2].visit_count = 2
+    
+    # 测试训练模式下的动作选择
+    
+    # 1. 测试温度为0的情况（确定性选择）
+    num_moves = 20  # 超过温度阈值，温度应为接近0
+    action_deterministic = select_action(config, num_moves, root, training=True)
+    assert action_deterministic == 0, "应为接近0时应选择访问次数最高的动作"
+    
+    # 2. 测试温度为正数的情况（概率性选择）
+    # 由于是概率性的，我们需要多次采样并验证分布
+    num_moves = 5  # 低于温度阈值，温度应为1.0
+    action_counts = {0: 0, 1: 0, 2: 0}
+    
+    # 进行多次采样
+    n_samples = 1000
+    for _ in range(n_samples):
+        action = select_action(config, num_moves, root, training=True)
+        action_counts[action] += 1
+    
+    # 验证分布：访问次数越高的动作被选择的概率应该越大
+    assert action_counts[0] > action_counts[1] > action_counts[2], "访问次数越高的动作被选择的概率应该越大"
+    
+    # 4. 测试评估模式（非训练模式）
+    action_eval = select_action(config, num_moves, root, training=False)
+    assert action_eval == 0, "评估模式应选择访问次数最高的动作，不受温度影响"
+    
+    # 5. 测试边界情况：没有子节点
+    empty_root = Node(prior=1.0, to_play=1)
+    with pytest.raises(ValueError, match="Cannot select action: No children visited."):
+        select_action(config, num_moves, empty_root, training=True)
+
+
+def test_add_dirichlet_noise():
+    """测试添加 Dirichlet 噪声"""
+    # 创建配置
+    config = MuZeroConfig(
+        action_space_size=9,
+        discount=0.99,
+        root_dirichlet_alpha=0.3,  # Dirichlet 噪声参数
+        num_simulations=50,
+        batch_size=512,
+        td_steps=10,
+        num_actors=1,
+        lr_init=0.05,
+        lr_decay_steps=1000,
+        is_two_player_game=True,
+        pb_c_base=19652,
+        pb_c_init=1.25,
+        temperature_threshold=None,
+        root_exploration_fraction=0.25  # 噪声混合比例
+    )
+    
+    # 创建根节点
+    root = Node(prior=1.0, to_play=1)
+    
+    # 添加子节点，设置初始先验概率
+    actions = [0, 1, 2, 3]
+    initial_priors = {0: 0.4, 1: 0.3, 2: 0.2, 3: 0.1}
+    
+    for action, prior in initial_priors.items():
+        root.children[action] = Node(prior=prior, to_play=-1)
+    
+    # 记录添加噪声前的先验概率
+    original_priors = {action: child.prior for action, child in root.children.items()}
+    
+    # 设置随机种子以确保测试结果可重现
+    np.random.seed(42)
+    
+    # 生成预期的 Dirichlet 噪声（与函数内部相同的参数）
+    expected_noise = np.random.dirichlet([config.root_dirichlet_alpha] * len(actions))
+    
+    # 重置随机种子，确保 add_dirichlet_noise 函数内部生成相同的噪声
+    np.random.seed(42)
+    
+    # 添加 Dirichlet 噪声
+    add_dirichlet_noise(config, root)
+    
+    # 验证噪声已正确添加
+    for idx, action in enumerate(actions):
+        # 计算期望的先验概率：原始先验 * (1-frac) + 噪声 * frac
+        expected_prior = original_priors[action] * (1 - config.root_exploration_fraction) + expected_noise[idx] * config.root_exploration_fraction
+        # 验证实际先验概率与期望值相符
+        assert abs(root.children[action].prior - expected_prior) < 1e-6, f"动作 {action} 的先验概率不符合预期"
+    
+    # 验证添加噪声后的先验概率总和仍接近 1
+    total_prior = sum(child.prior for child in root.children.values())
+    assert abs(total_prior - 1.0) < 1e-6, f"添加噪声后的先验概率总和应为 1.0，实际为 {total_prior}"
+    
+    # 验证添加噪声改变了原始先验概率
+    priors_changed = False
+    for action in actions:
+        if abs(root.children[action].prior - original_priors[action]) > 1e-6:
+            priors_changed = True
+            break
+    assert priors_changed, "添加噪声应该改变至少一个先验概率"
+    
+    # 测试不同的 root_exploration_fraction 值
+    # 当 root_exploration_fraction = 0 时，先验概率应保持不变
+    config.root_exploration_fraction = 0.0
+    
+    # 重置节点的先验概率
+    for action, prior in initial_priors.items():
+        root.children[action].prior = prior
+    
+    # 添加噪声（但由于 fraction = 0，应该没有效果）
+    add_dirichlet_noise(config, root)
+    
+    # 验证先验概率未改变
+    for action in actions:
+        assert abs(root.children[action].prior - initial_priors[action]) < 1e-6, f"当 exploration_fraction = 0 时，先验概率不应改变"
+    
+    # 测试 root_exploration_fraction = 1.0 的情况（完全由噪声决定）
+    config.root_exploration_fraction = 1.0
+    
+    # 重置节点的先验概率
+    for action, prior in initial_priors.items():
+        root.children[action].prior = prior
+    
+    # 重置随机种子
+    np.random.seed(42)
+    expected_noise = np.random.dirichlet([config.root_dirichlet_alpha] * len(actions))
+    
+    # 重置随机种子
+    np.random.seed(42)
+    
+    # 添加噪声
+    add_dirichlet_noise(config, root)
+    
+    # 验证先验概率完全由噪声决定
+    for idx, action in enumerate(actions):
+        assert abs(root.children[action].prior - expected_noise[idx]) < 1e-6, f"当 exploration_fraction = 1 时，先验概率应完全由噪声决定"
+
+
+def test_mcts_facade():
+    """测试 MCTSFacade 类的功能"""
+    # 创建配置
+    config = MuZeroConfig(
+        action_space_size=9,  # 井字棋的动作空间大小
+        observation_shape=(2, 3, 3),  # 井字棋的观察空间形状
+        stacked_observations=0,  # 不需要堆叠观察
+        encoding_size=64,  # 编码状态大小
+        fc_representation_layers=[32],  # 表征网络层
+        fc_dynamics_layers=[32],  # 动态网络层
+        fc_reward_layers=[32],  # 奖励网络层
+        fc_value_layers=[32],  # 价值网络层
+        fc_policy_layers=[32],  # 策略网络层
+        support_size=1,  # 支持大小
+        is_two_player_game=True,  # 井字棋是双人游戏
+        discount=0.99,  # 折扣因子
+        num_simulations=10,  # 模拟次数（测试中使用较小的值）
+        pb_c_base=19652,
+        pb_c_init=1.25,
+        add_exploration_noise=False  # 测试中不添加探索噪声
+    )
+    
+    # 创建游戏环境
+    game = TicTacToeGame(seed=42)
+    
+    # 创建模型
+    model = MuZeroNetwork(config)
+    
+    # 创建 MCTSFacade
+    mcts_facade = MCTSFacade(config, model, game)
+    
+    # 测试 run 方法
+    root, extra_info = mcts_facade.run()
+    
+    # 验证返回的根节点
+    assert root.visit_count > 0
+    assert len(root.children) > 0
+    
+    # 验证额外信息
+    assert "max_tree_depth" in extra_info
+    assert "root_predicted_value" in extra_info
+    
+    # 测试 select_action 方法
+    action = mcts_facade.select_action(root, training=True)
+    assert 0 <= action < config.action_space_size
+    
+    # 测试 search_and_play 方法
+    action, search_root = mcts_facade.search_and_play(training=True)
+    assert 0 <= action < config.action_space_size
+    
+    # 测试游戏流程
+    # 执行一步动作
+    observation, reward, terminated, next_player = game.step(action)
+    
+    # 验证游戏状态
+    assert observation.shape == (2, 3, 3)
+    
+    # 在新状态下再次执行 MCTS 搜索
+    new_mcts_facade = MCTSFacade(config, model, game)
+    new_root, new_extra_info = new_mcts_facade.run()
+    
+    # 验证新状态下的搜索结果
+    assert new_root.visit_count > 0
+    assert len(new_root.children) > 0 or game.terminal()
+    
+    # 如果游戏未结束，验证可以选择下一个动作
+    if not game.terminal():
+        new_action = new_mcts_facade.select_action(new_root, training=True)
+        assert 0 <= new_action < config.action_space_size
+        assert new_action in game.legal_actions()

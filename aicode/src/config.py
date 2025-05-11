@@ -27,6 +27,7 @@ class MuZeroConfig:
                  # UCB 参数
                  root_dirichlet_alpha: float = 0.25,
                  root_exploration_fraction: float = 0.25,
+                 add_exploration_noise: bool = True,       # 是否在根节点添加探索噪声
                  pb_c_base: float = 19652,
                  pb_c_init: float = 1.25,
                  # 探索温度相关
@@ -85,6 +86,7 @@ class MuZeroConfig:
         self.discount = discount
         self.root_dirichlet_alpha = root_dirichlet_alpha
         self.root_exploration_fraction = root_exploration_fraction
+        self.add_exploration_noise = add_exploration_noise
         self.pb_c_base = pb_c_base
         self.pb_c_init = pb_c_init
         self.temperature_threshold = temperature_threshold
@@ -120,6 +122,9 @@ class MuZeroConfig:
 
         # --- 动态计算的参数 ---
         self.visit_softmax_temperature_fn = self.create_visit_softmax_temperature_fn()
+        
+        # --- 玩家切换函数 ---
+        self.next_player_fn = self.create_next_player_fn()
 
     def create_visit_softmax_temperature_fn(self):
         """
@@ -183,6 +188,20 @@ class MuZeroConfig:
         )
         print("Warning: get_board_game_config() is using placeholder values. Please fill in actual board game parameters.")
         return config
+
+    def create_next_player_fn(self):
+        """
+        创建玩家切换函数，根据游戏类型返回不同的玩家切换逻辑。
+        
+        Returns:
+            函数: 接受当前玩家作为参数，返回下一个玩家。
+        """
+        if self.is_two_player_game:
+            # 双人游戏，简单地取反玩家标识（1 变为 -1，-1 变为 1）
+            return lambda current_player: -current_player
+        else:
+            # 单人游戏，玩家保持不变
+            return lambda current_player: current_player
 
 # 可以在这里添加一个主函数入口或者测试代码来验证配置类的使用
 if __name__ == '__main__':

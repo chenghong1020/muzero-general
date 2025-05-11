@@ -8,6 +8,7 @@ import torch
 from config import MuZeroConfig
 from model import MuZeroNetwork
 from utils import support_to_scalar, scalar_to_support  # 添加导入
+from game import Game
 
 # 可以将 Player 简化为 int 类型的别名 （双人制 1 本玩家 -1 对手）
 Player = int
@@ -72,12 +73,12 @@ class Node:
         self.to_play = to_play
         self.reward = reward
         self.hidden_state = hidden_state
-
+    
         # 使用 softmax 获取策略概率
         policy = torch.softmax(policy_logits, dim=1).squeeze(0).cpu().numpy()
-
-        # 根据游戏类型决定下一个玩家（移到循环外）
-        next_to_play = -to_play if config.is_two_player_game and to_play != 0 else to_play
+    
+        # 使用配置中的玩家切换函数
+        next_to_play = config.next_player_fn(to_play)
         
         for action in actions:
             self.children[action] = Node(prior=policy[action], to_play=next_to_play)
@@ -141,7 +142,10 @@ def run_mcts(config: MuZeroConfig,
         # 如果没有提供，需要模型进行初始推理
         # 需要将观察状态转换为张量并传递给模型
         observation_tensor = torch.tensor(observation).float().unsqueeze(0).to(next(model.parameters()).device)
-        network_output = model.initial_inference(observation_tensor)
+        
+        # 使用 torch.no_grad() 上下文管理器进行推理，避免梯度计算
+        with torch.no_grad():
+            network_output = model.initial_inference(observation_tensor)
         
         root_predicted_value = support_to_scalar(network_output["value_logits"], config.support_size).item()
         policy_logits = network_output["policy_logits"]
@@ -163,16 +167,16 @@ def run_mcts(config: MuZeroConfig,
         # --- 1. 选择阶段 ---
         while node.expanded():
             current_tree_depth += 1
-            action, node = select_child(config, node, min_max_stats, legal_actions)
+            action, node = select_child(config, node, min_max_stats)
             search_path.append(node)
-            # 只在双人回合制游戏中切换玩家
-            if config.is_two_player_game:
-                virtual_to_play = -virtual_to_play# 简单的玩家切换逻辑
+            # 使用配置中的玩家切换函数
+            virtual_to_play = config.next_player_fn(virtual_to_play)
 
         # --- 2. 扩展阶段 ---
         parent = search_path[-2]
         # 使用模型进行循环推理
-        network_output = model.recurrent_inference(parent.hidden_state, torch.tensor([[action]]).to(parent.hidden_state.device))
+        with torch.no_grad():
+            network_output = model.recurrent_inference(parent.hidden_state, torch.tensor([[action]]).to(parent.hidden_state.device))
 
         value = support_to_scalar(network_output["value_logits"], config.support_size).item()
         reward = support_to_scalar(network_output["reward_logits"], config.support_size).item()
@@ -350,3 +354,90 @@ def select_action(config: MuZeroConfig, num_moves: int, node: Node, training: bo
         action = max(visit_counts, key=lambda item: item[1])[0]
 
     return action
+
+
+class MCTSFacade:
+    """
+    MCTS 搜索的外观模式实现，简化 MCTS 搜索的启动过程。
+    只需要提供必要的参数如 game、model 和 config。
+    """
+    def __init__(self, config: MuZeroConfig, model: MuZeroNetwork, game: Game):
+        """
+        初始化 MCTS Facade。
+        
+        Args:
+            config: MuZero 配置。
+            model: MuZero 网络模型。
+            game: 游戏环境实例。
+        """
+        self.config = config
+        self.model = model
+        self.game = game
+    
+    def run(self, override_root_with=None) -> tuple:
+        """
+        执行 MCTS 搜索。
+        
+        Args:
+            override_root_with: (可选) 用于从外部提供根节点信息。
+        
+        Returns:
+            tuple: (搜索后的根节点, 额外信息)
+        """
+        # 创建根节点
+        root = Node(prior=1.0, to_play=self.game.to_play())
+        
+        # 从游戏环境获取当前状态
+        observation = self.game.get_observation()
+        legal_actions = self.game.legal_actions()
+        to_play = self.game.to_play()
+        
+        # 确定完整的动作空间
+        action_space = list(range(self.config.action_space_size))
+        
+        # 执行 MCTS 搜索
+        return run_mcts(
+            config=self.config,
+            root=root,
+            action_space=action_space,
+            model=self.model,
+            legal_actions=legal_actions,
+            to_play=to_play,
+            add_exploration_noise=self.config.add_exploration_noise,
+            observation=observation,
+            override_root_with=override_root_with
+        )
+    
+    def select_action(self, root: Node, training: bool = True) -> int:
+        """
+        根据 MCTS 搜索结果选择动作。
+        
+        Args:
+            root: MCTS 搜索后的根节点。
+            training: 是否处于训练模式，默认为 True。
+            
+        Returns:
+            int: 选择的动作索引。
+        """
+        # 获取当前游戏的步数（如果游戏类提供此信息）
+        num_moves = getattr(self.game, 'num_moves', lambda: 0)()
+        
+        return select_action(self.config, num_moves, root, training)
+    
+    def search_and_play(self, training: bool = True) -> tuple:
+        """
+        执行完整的搜索并选择动作。
+        
+        Args:
+            training: 是否处于训练模式，默认为 True。
+            
+        Returns:
+            tuple: (选择的动作, 搜索树根节点)
+        """
+        # 执行搜索
+        root, extra_info = self.run()
+        
+        # 选择动作
+        action = self.select_action(root, training=training)
+        
+        return action, root
