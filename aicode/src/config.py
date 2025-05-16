@@ -125,6 +125,25 @@ class MuZeroConfig:
         
         # --- 玩家切换函数 ---
         self.next_player_fn = self.create_next_player_fn()
+    
+    def __getstate__(self):
+        """
+        自定义序列化行为，排除不可序列化的函数对象。
+        """
+        state = self.__dict__.copy()
+        # 移除不可序列化的函数对象
+        state.pop('visit_softmax_temperature_fn', None)
+        state.pop('next_player_fn', None)
+        return state
+    
+    def __setstate__(self, state):
+        """
+        自定义反序列化行为，重新创建函数对象。
+        """
+        self.__dict__.update(state)
+        # 重新创建函数对象
+        self.visit_softmax_temperature_fn = self.create_visit_softmax_temperature_fn()
+        self.next_player_fn = self.create_next_player_fn()
 
     def create_visit_softmax_temperature_fn(self):
         """
@@ -134,7 +153,9 @@ class MuZeroConfig:
         threshold = self.temperature_threshold
         if threshold is None:
             # 如果未设置阈值，则始终使用温度 1.0
-            return lambda training_step: 1.0
+            def temperature_const(training_step: int) -> float:
+                return 1.0
+            return temperature_const
         else:
             # 在阈值内逐渐降低温度，之后固定为 0.0 (greedy)
             # 这里可以根据需要实现更复杂的调度逻辑
@@ -198,10 +219,14 @@ class MuZeroConfig:
         """
         if self.is_two_player_game:
             # 双人游戏，简单地取反玩家标识（1 变为 -1，-1 变为 1）
-            return lambda current_player: -current_player
+            def next_player_dual(current_player):
+                return -current_player
+            return next_player_dual
         else:
             # 单人游戏，玩家保持不变
-            return lambda current_player: current_player
+            def next_player_single(current_player):
+                return current_player
+            return next_player_single
 
 # 可以在这里添加一个主函数入口或者测试代码来验证配置类的使用
 if __name__ == '__main__':
