@@ -95,6 +95,7 @@ class ReplayBuffer:
                 self.total_samples -= len(self.buffer[del_id].root_values)
                 del self.buffer[del_id]
     
+    #TODO - make the sample lockless and not blocking
     def sample_batch(self, num_unroll_steps: int, batch_size: int) -> TrainingBatch:
         """
         从回放缓冲区采样训练批次

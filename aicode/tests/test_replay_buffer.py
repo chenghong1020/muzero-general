@@ -5,6 +5,7 @@ import sys
 import os
 import multiprocessing as mp
 from unittest.mock import MagicMock, patch
+import time
 
 # 添加 src 目录到 Python 路径
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
@@ -272,30 +273,60 @@ class TestReplayBuffer:
             assert batch.weight_batch.shape[0] == batch_size
             assert batch.weight_batch.dtype == torch.float32
     
-    @pytest.mark.parametrize("use_multiprocessing", [True, False])
-    def test_process_communication(self, mock_config, sample_game_history, use_multiprocessing):
-        """测试进程间通信"""
-        if use_multiprocessing:
-            # 使用多进程模式
-            buffer = ReplayBuffer(mock_config)
-            buffer.start()
+    def test_multithreading_safety(self, mock_config, sample_game_history):
+        """测试多线程环境下 ReplayBuffer 的线程安全性"""
+        import threading
+        
+        buffer = ReplayBuffer(mock_config)
+        
+        # 创建多个游戏历史对象
+        game_histories = []
+        for i in range(10):
+            # 创建游戏的深拷贝，避免引用同一个对象
+            game_copy = GameHistory(config=mock_config)
+            game_copy.observation_history = sample_game_history.observation_history.copy()
+            game_copy.action_history = sample_game_history.action_history.copy()
+            game_copy.reward_history = sample_game_history.reward_history.copy()
+            game_copy.to_play_history = sample_game_history.to_play_history.copy()
+            game_copy.root_values = sample_game_history.root_values.copy()
+            game_copy.child_visits = sample_game_history.child_visits.copy()
+            game_histories.append(game_copy)
+        
+        # 定义线程函数：保存游戏
+        def save_games_thread():
+            for game in game_histories[:5]:
+                buffer.save_game(game)
+        
+        # 定义线程函数：采样批次
+        def sample_batch_thread():
+            # 等待一些游戏被保存
+            time.sleep(0.2)
             
-            # 保存游戏
-            buffer.save_game(sample_game_history)
-            
-            # 采样批次
-            batch = buffer.sample_batch(mock_config.num_unroll_steps, mock_config.batch_size)
-            
-            # 验证批次结构
+            batch = buffer.sample_batch(mock_config.num_unroll_steps, 2)
             assert isinstance(batch, TrainingBatch)
-            assert batch.observation_batch.shape[0] == mock_config.batch_size
-            
-            # 清理
-            buffer.task_queue.put({"type": "terminate"})
-            buffer.join(timeout=1)
-        else:
-            # 直接调用内部方法
-            buffer = ReplayBuffer(mock_config)
-            buffer._save_game(sample_game_history)
-            batch = buffer._sample_batch(mock_config.num_unroll_steps, mock_config.batch_size)
-            assert isinstance(batch, TrainingBatch)
+            assert batch.observation_batch.shape[0] == 2
+        
+        # 创建并启动线程
+        threads = []
+        for _ in range(2):  # 创建多个保存游戏的线程
+            t = threading.Thread(target=save_games_thread)
+            threads.append(t)
+            t.start()
+        
+        # 创建采样批次的线程
+        t = threading.Thread(target=sample_batch_thread)
+        threads.append(t)
+        t.start()
+        
+        # 等待所有线程完成
+        for t in threads:
+            t.join()
+        
+        # 验证结果
+        assert buffer.num_played_games > 0
+        assert len(buffer.buffer) > 0
+        
+        # 关闭线程池
+        buffer.close()
+    
+    
