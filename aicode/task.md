@@ -43,11 +43,11 @@
 *   **任务描述**: 实现 `ReplayBuffer` 类，支持存储 `GameHistory` 对象和采样 `TrainingBatch` 数据。考虑优先经验回放 (PER) 的实现。参考 <mcfile name="design_interface.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_interface.md"></mcfile> 和 <mcfile name="design_structure.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_structure.md"></mcfile> 中 ReplayBuffer 部分。
 *   **涉及类**: `ReplayBuffer`, `GameHistory`
 *   **完成目标**: 提供经验数据的存储和采样机制，连接自博弈和训练。
-*   **当前状态**: 未开始
+*   **当前状态**: 已完成
 
 ### 7. 共享存储 (Shared Storage) 实现
 
-*   **任务描述**: 实现 `SharedStorage` 类，用于存储和同步最新的网络权重及训练统计信息。考虑使用 Ray 或类似工具支持分布式。参考 <mcfile name="design_interface.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_interface.md"></mcfile> 和 <mcfile name="design_structure.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_structure.md"></mcfile> 中 Shared Storage 部分。
+*   **任务描述**: 实现 `SharedStorage` 类，用于存储和同步最新的网络权重及训练统计信息。考虑使用concurrent.futures类似工具支持分布式。参考 <mcfile name="design_interface.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_interface.md"></mcfile> 和 <mcfile name="design_structure.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_structure.md"></mcfile> 中 Shared Storage 部分。
 *   **涉及类**: `SharedStorage`
 *   **完成目标**: 实现训练器和自博弈 Actor 之间的模型同步。
 *   **当前状态**: 未开始
