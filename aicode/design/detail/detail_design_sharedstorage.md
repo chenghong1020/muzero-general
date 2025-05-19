@@ -168,6 +168,7 @@ def wait_for_training_step(self, target_step, timeout=None):
 为了支持多线程/多进程环境，SharedStorage 将使用 Python 的 concurrent.futures 和 threading 模块
 - 使用 threading.RLock 实现线程安全
 - 使用 concurrent.futures 实现并行处理
+- 暂不使用Ray框架
 
 ## 6. 训练器更新模型
 
@@ -208,10 +209,10 @@ weights = get(shared_storage.get_weights.remote())
 representation_model.load_state_dict(weights["representation"])
 dynamics_model.load_state_dict(weights["dynamics"])
 prediction_model.load_state_dict(weights["prediction"])
-weights = get(shared_storage.get_weights.remote())
+weights = get(shared_storage.get_weights())
 
 # 等待新模型
-current_step = get(shared_storage.wait_for_training_step.remote(target_step, timeout=60))
+current_step = get(shared_storage.wait_for_training_step(target_step, timeout=60))
 ```
 
 ## 总结
