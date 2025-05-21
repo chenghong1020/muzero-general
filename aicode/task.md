@@ -50,7 +50,7 @@
 *   **任务描述**: 实现 `SharedStorage` 类，用于存储和同步最新的网络权重及训练统计信息。考虑使用concurrent.futures类似工具支持分布式。参考 <mcfile name="design_interface.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_interface.md"></mcfile> 和 <mcfile name="design_structure.md" path="/Users/bytedance/dev/github/muzero-general/aicode/design/design_structure.md"></mcfile> 中 Shared Storage 部分。
 *   **涉及类**: `SharedStorage`
 *   **完成目标**: 实现训练器和自博弈 Actor 之间的模型同步。
-*   **当前状态**: 未开始
+*   **当前状态**: 已完成
 
 ### 8. 自我对弈 (Self-Play) 流程实现
 
