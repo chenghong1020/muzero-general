@@ -83,15 +83,15 @@ class TicTacToeGame(Game):
     """
     井字棋游戏环境实现。
     玩家 1 (X) 用 1 表示，玩家 2 (O) 用 -1 表示。
-    玩家索引: 0 代表玩家 1 (X)， 1 代表玩家 2 (O)。
+    玩家标识: 1 代表玩家 X， -1 代表玩家 O。
     """
     def __init__(self, seed: Optional[int] = None):
         super().__init__(seed)
         if seed is not None:
             np.random.seed(seed)
         self._board = np.zeros((3, 3), dtype=np.int8)
-        self._current_player = 0 # 0 for X, 1 for O
-        self._winner = None # None: ongoing, 0: X wins, 1: O wins, -1: draw
+        self._current_player = 1  # 1 for X, -1 for O
+        self._winner = None  # None: ongoing, 1: X wins, -1: O wins, 0: draw
 
     @property
     def action_space_size(self) -> int:
@@ -104,7 +104,7 @@ class TicTacToeGame(Game):
 
     def reset(self) -> np.ndarray:
         self._board = np.zeros((3, 3), dtype=np.int8)
-        self._current_player = 0
+        self._current_player = 1  # 初始玩家为 X (1)
         self._winner = None
         return self.get_observation()
 
@@ -124,39 +124,30 @@ class TicTacToeGame(Game):
              # 严格处理：抛出异常
              raise ValueError(f"Illegal move: Cell ({row}, {col}) is already occupied.")
 
-
-        player_mark = 1 if self._current_player == 0 else -1
-        self._board[row, col] = player_mark
+        # 直接使用当前玩家标识作为棋盘标记
+        self._board[row, col] = self._current_player
 
         terminated = self._check_termination()
         reward = 0.0
         if terminated:
-            if self._winner == self._current_player: # 当前玩家获胜
+            if self._winner == self._current_player:  # 当前玩家获胜
                 reward = 1.0
-            elif self._winner == -1: # 平局
+            elif self._winner == 0:  # 平局
                 reward = 0.0
-            else: # 对手获胜 (理论上不会在这里发生，因为是当前玩家移动后检查)
-                 # 但如果考虑对手获胜的情况，奖励应为 -1
-                 # 为了清晰，我们在检查终止状态时就确定了赢家
-                 # 如果游戏结束但不是当前玩家赢，也不是平局，说明是对手赢了
-                 if self._winner is not None and self._winner != -1:
-                     reward = -1.0 # 输了给对手
+            else:  # 对手获胜
+                reward = -1.0
 
-        # 切换玩家
+        # 切换玩家 - 使用与 config.py 一致的逻辑
         if not terminated:
-            self._current_player = 1 - self._current_player
+            self._current_player = -self._current_player
 
-        next_player = self.to_play() # 获取下一个玩家
-        # 如果游戏结束，to_play 返回的是游戏结束时的玩家，这可能需要调整
-        # MuZero 通常需要游戏结束时的价值，所以这里的 to_play 可能需要反映这一点
-        # 或者在 GameHistory 中单独记录
-
+        next_player = self.to_play()  # 获取下一个玩家
         return self.get_observation(), reward, terminated, next_player
-
 
     def _check_termination(self) -> bool:
         """检查游戏是否结束 (胜利或平局)。"""
-        player_mark = 1 if self._current_player == 0 else -1
+        # 直接使用当前玩家标识检查胜利
+        player_mark = self._current_player
 
         # 检查行、列、对角线
         for i in range(3):
@@ -171,10 +162,10 @@ class TicTacToeGame(Game):
 
         # 检查平局 (棋盘已满)
         if np.all(self._board != 0):
-            self._winner = -1 # Draw
+            self._winner = 0  # 平局用 0 表示，而不是 -1
             return True
 
-        return False # Game not terminated
+        return False  # Game not terminated
 
     def legal_actions(self) -> List[int]:
         if self.terminal():
@@ -191,16 +182,13 @@ class TicTacToeGame(Game):
     def get_observation(self) -> np.ndarray:
         """
         将棋盘状态转换为 (2, 3, 3) 的 NumPy 数组。
-        Channel 0: 玩家 1 (X) 的棋子位置 (1 表示有棋子, 0 表示无)
-        Channel 1: 玩家 2 (O) 的棋子位置 (1 表示有棋子, 0 表示无)
+        Channel 0: 玩家 X (1) 的棋子位置 (1 表示有棋子, 0 表示无)
+        Channel 1: 玩家 O (-1) 的棋子位置 (1 表示有棋子, 0 表示无)
         """
         obs = np.zeros((2, 3, 3), dtype=np.float32)
-        obs[0, :, :] = (self._board == 1).astype(np.float32) # Player X (1)
-        obs[1, :, :] = (self._board == -1).astype(np.float32) # Player O (-1)
+        obs[0, :, :] = (self._board == 1).astype(np.float32)  # Player X (1)
+        obs[1, :, :] = (self._board == -1).astype(np.float32)  # Player O (-1)
         return obs
-
-    def terminal(self) -> bool:
-        return self._winner is not None
 
     def render(self) -> None:
         """在控制台打印棋盘状态。"""
@@ -212,14 +200,14 @@ class TicTacToeGame(Game):
                 print(symbols[self._board[row, col]], end=" | ")
             print("\n-------------")
         if self.terminal():
-            if self._winner == 0:
+            if self._winner == 1:
                 print("Player X wins!")
-            elif self._winner == 1:
-                print("Player O wins!")
             elif self._winner == -1:
+                print("Player O wins!")
+            elif self._winner == 0:
                 print("It's a draw!")
         else:
-             print(f"Player {'X' if self._current_player == 0 else 'O'}'s turn.")
+            print(f"Player {'X' if self._current_player == 1 else 'O'}'s turn.")
 
 
     def close(self) -> None:

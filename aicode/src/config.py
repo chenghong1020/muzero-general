@@ -1,5 +1,7 @@
 import math
-from typing import List, Optional, Tuple
+import importlib
+import os
+from typing import List, Optional, Tuple, Dict, Type, Any
 
 class MuZeroConfig:
     def __init__(self,
@@ -125,6 +127,9 @@ class MuZeroConfig:
         
         # --- 玩家切换函数 ---
         self.next_player_fn = self.create_next_player_fn()
+        
+        # --- 游戏类 ---
+        self.game_class = None  # 将在 set_game_class 中设置
     
     def __getstate__(self):
         """
@@ -227,6 +232,72 @@ class MuZeroConfig:
             def next_player_single(current_player):
                 return current_player
             return next_player_single
+
+    def set_game_class(self, game_class):
+        """设置游戏类"""
+        self.game_class = game_class
+    
+    def new_game(self, seed=None):
+        """创建一个新的游戏实例
+        
+        Args:
+            seed: 随机种子
+            
+        Returns:
+            Game: 游戏实例
+        """
+        if self.game_class is None:
+            raise ValueError("游戏类未设置，请先调用 set_game_class 方法")
+        return self.game_class(seed)
+
+# 游戏注册表
+_GAME_REGISTRY = {}
+
+def register_game(name: str, game_class: Type, config: MuZeroConfig):
+    """注册游戏类和对应的配置类
+    
+    Args:
+        name: 游戏名称
+        game_class: 游戏类
+        config: MuZeroConfig 配置对象
+    """
+    _GAME_REGISTRY[name] = {
+        'game_class': game_class,
+        'config': config
+    }
+
+def get_game_config(game_name: str, config_overrides: Dict[str, Any] = None) -> Tuple[Type, MuZeroConfig]:
+    """获取游戏类和配置
+    
+    Args:
+        game_name: 游戏名称
+        config_overrides: 配置覆盖参数
+        
+    Returns:
+        Tuple[Type, MuZeroConfig]: 游戏类和配置实例
+    """
+    # 首先检查游戏是否已注册
+    if game_name in _GAME_REGISTRY:
+        game_info = _GAME_REGISTRY[game_name]
+        game_class = game_info['game_class']
+        config = game_info['config']  # 直接获取配置实例
+    
+    # 应用配置覆盖
+    if config_overrides:
+        for key, value in config_overrides.items():
+            if hasattr(config, key):
+                setattr(config, key, value)
+            else:
+                raise AttributeError(f"配置类没有属性 '{key}'")
+    
+    # 设置游戏类
+    config.set_game_class(game_class)
+    
+    return game_class, config
+
+# 注册内置游戏
+from game import TicTacToeGame
+register_game('tictactoe', TicTacToeGame)
 
 # 可以在这里添加一个主函数入口或者测试代码来验证配置类的使用
 if __name__ == '__main__':

@@ -137,6 +137,18 @@ class SharedStorage:
         """
         with self._lock:
             self._checkpoint["info"] = copy.deepcopy(info)
+
+    def atomic_update_info(self, update_fn: Callable[[Dict], Dict]) -> None:
+        """
+        原子化更新统计信息
+        
+        参数:
+            update_fn: 接收当前info字典，返回更新后的字典
+        """
+        with self._lock:
+            current_info = copy.deepcopy(self._checkpoint.get("info", {}))
+            updated_info = update_fn(current_info)
+            self._checkpoint["info"] = updated_info
     
     def wait_for_training_step(self, target_step: int, timeout: Optional[float] = None) -> int:
         """
