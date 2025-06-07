@@ -17,14 +17,14 @@ from shared_storage import SharedStorage
 from replay_buffer import ReplayBuffer
 
 
-def run_selfplay(config: MuZeroConfig, shared_storage: SharedStorage, replay_buffer: ReplayBuffer):
+def run_selfplay(config: MuZeroConfig, shared_storage: SharedStorage, replay_buffer: ReplayBufferProcess):
     """
     自我对弈主循环，负责初始化和管理整个自我对弈过程，协调多个并行的游戏对弈 Actor。
     
     Args:
         config: MuZero 配置。
         shared_storage: 共享存储实例，用于获取最新的网络权重。
-        replay_buffer: 回放缓冲区实例，用于存储游戏历史。
+        replay_buffer: 回放缓冲区进程实例，用于存储游戏历史。
     """
     # 设置日志
     logging.basicConfig(
@@ -47,12 +47,12 @@ def run_selfplay(config: MuZeroConfig, shared_storage: SharedStorage, replay_buf
     num_actors = config.num_actors if hasattr(config, 'num_actors') else mp.cpu_count()
     logger.info(f"启动 {num_actors} 个自我对弈 Actor")
     
-    # 启动 play_game Actor 进程（修改参数传递）
+    # 启动 play_game Actor 进程
     processes = []
     for actor_id in range(num_actors):
         process = mp.Process(
             target=play_game_actor,
-            args=(actor_id, config, shared_storage, game_history_queue, stop_event),  # 改回传递完整的config
+            args=(actor_id, config, shared_storage, game_history_queue, stop_event),
             daemon=True
         )
         process.start()
@@ -67,8 +67,8 @@ def run_selfplay(config: MuZeroConfig, shared_storage: SharedStorage, replay_buf
                 # 非阻塞方式从队列获取游戏历史，超时 0.1 秒
                 game_history = game_history_queue.get(timeout=0.1)
                 
-                # 将游戏历史发送到回放缓冲区
-                replay_buffer.save_game(game_history)
+                # 将游戏历史发送到回放缓冲区进程
+                replay_buffer.save_game(game_history, shared_storage)
                 
                 games_collected += 1
                 if games_collected % 10 == 0:  # 每收集 10 局游戏记录一次日志

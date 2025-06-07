@@ -30,15 +30,13 @@ class ReplayBuffer:
         self.num_played_steps = 0  # 已玩步数
         self.total_samples = 0  # 总样本数
         
-        # 创建线程池
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-        
         # 创建锁来保护共享变量
         self.buffer_lock = threading.Lock()
         
         # 设置随机种子
         np.random.seed(self.config.seed)
     
+    # 修改save_game方法，移除异步执行逻辑，因为现在整个ReplayBuffer都在独立进程中运行
     def save_game(self, game_history: GameHistory, shared_storage=None):
         """
         保存游戏历史到回放缓冲区
@@ -47,20 +45,48 @@ class ReplayBuffer:
             game_history: GameHistory对象，包含游戏历史数据
             shared_storage: SharedStorage对象，用于更新统计信息
         """
-        # 使用线程池异步执行保存游戏的操作
-        future = self.executor.submit(self._save_game, game_history)
+        # 直接调用_save_game方法，不再使用线程池
+        self._save_game(game_history)
         
-        # 如果需要，可以等待操作完成
-        # future.result()
-        
-        # 如果有共享存储，可以在保存完成后更新统计信息
+        # 如果有共享存储，直接更新统计信息
         if shared_storage:
-            future.add_done_callback(
-                lambda _: shared_storage.set_info("num_played_games", self.num_played_games)
-            )
-            future.add_done_callback(
-                lambda _: shared_storage.set_info("num_played_steps", self.num_played_steps)
-            )
+            shared_storage.set_info("num_played_games", self.num_played_games)
+            shared_storage.set_info("num_played_steps", self.num_played_steps)
+    
+    # 修改sample_batch方法，移除异步执行逻辑
+    def sample_batch(self, num_unroll_steps: int, batch_size: int) -> TrainingBatch:
+        """
+        从回放缓冲区采样训练批次
+        
+        Args:
+            num_unroll_steps: 展开步数
+            batch_size: 批次大小
+            
+        Returns:
+            batch: 包含训练数据的字典
+        """
+        # 直接调用_sample_batch方法，不再使用线程池
+        return self._sample_batch(num_unroll_steps, batch_size)
+    
+    # 修改update_priorities方法，移除异步执行逻辑
+    def update_priorities(self, priorities: np.ndarray, indices: List[Tuple[int, int]]):
+        """
+        更新优先级
+        
+        Args:
+            priorities: 新的优先级值
+            indices: 对应的索引 [(game_id, position)]
+        """
+        # 直接调用_update_priorities方法，不再使用线程池
+        self._update_priorities(priorities, indices)
+    
+    # 修改get_buffer方法，移除异步执行逻辑
+    def get_buffer(self):
+        """
+        获取缓冲区内容
+        """
+        # 直接返回缓冲区的深拷贝，不再使用线程池
+        return copy.deepcopy(self.buffer)
     
     def _save_game(self, game_history: GameHistory):
         """内部方法：实际保存游戏历史的逻辑"""
@@ -94,22 +120,6 @@ class ReplayBuffer:
                 del_id = self.num_played_games - len(self.buffer)
                 self.total_samples -= len(self.buffer[del_id].root_values)
                 del self.buffer[del_id]
-    
-    #TODO - make the sample lockless and not blocking
-    def sample_batch(self, num_unroll_steps: int, batch_size: int) -> TrainingBatch:
-        """
-        从回放缓冲区采样训练批次
-        
-        Args:
-            num_unroll_steps: 展开步数
-            batch_size: 批次大小
-            
-        Returns:
-            batch: 包含训练数据的字典
-        """
-        # 使用线程池执行采样操作并等待结果
-        future = self.executor.submit(self._sample_batch, num_unroll_steps, batch_size)
-        return future.result()
     
     def _sample_batch(self, num_unroll_steps: int, batch_size: int) -> TrainingBatch:
         """
@@ -369,3 +379,218 @@ class ReplayBuffer:
     def close(self):
         """关闭线程池"""
         self.executor.shutdown()
+
+
+class ReplayBufferProcess:
+    """
+    ReplayBuffer进程管理器，负责在独立进程中运行ReplayBuffer。
+    """
+    
+    def __init__(self, config: MuZeroConfig):
+        """
+        初始化ReplayBuffer进程管理器
+        
+        Args:
+            config: MuZeroConfig配置对象
+        """
+        self.config = config
+        
+        # 创建命令队列和结果队列
+        self.cmd_queue = mp.Queue()
+        self.result_queue = mp.Queue()
+        
+        # 创建游戏历史队列
+        self.game_history_queue = mp.Queue(maxsize=100)  # 限制队列大小，避免内存溢出
+        
+        # 创建停止事件
+        self.stop_event = mp.Event()
+        
+        # 创建并启动ReplayBuffer进程
+        self.process = mp.Process(
+            target=self._run_replay_buffer,
+            args=(config, self.cmd_queue, self.result_queue, self.game_history_queue, self.stop_event),
+            daemon=True
+        )
+        self.process.start()
+        
+        # 等待进程初始化完成
+        self._wait_for_init()
+    
+    def _wait_for_init(self):
+        """
+        等待ReplayBuffer进程初始化完成
+        """
+        self.cmd_queue.put(("init", None))
+        cmd, data = self.result_queue.get()
+        assert cmd == "init_done", f"初始化失败: {cmd}, {data}"
+    
+    def _run_replay_buffer(self, config, cmd_queue, result_queue, game_history_queue, stop_event):
+        """
+        在独立进程中运行ReplayBuffer
+        
+        Args:
+            config: MuZeroConfig配置对象
+            cmd_queue: 命令队列
+            result_queue: 结果队列
+            game_history_queue: 游戏历史队列
+            stop_event: 停止事件
+        """
+        try:
+            # 设置进程名称
+            import setproctitle
+            setproctitle.setproctitle("muzero_replay_buffer")
+        except ImportError:
+            pass
+        
+        # 设置日志
+        logging.basicConfig(
+            level=logging.INFO,
+            format="ReplayBuffer %(asctime)s [%(levelname)s] %(message)s",
+            handlers=[
+                logging.StreamHandler(),
+                logging.FileHandler(f"replay_buffer_{time.strftime('%Y%m%d_%H%M%S')}.log")
+            ]
+        )
+        logger = logging.getLogger("replay_buffer")
+        
+        # 创建ReplayBuffer实例
+        replay_buffer = ReplayBuffer(config)
+        
+        # 通知主进程初始化完成
+        result_queue.put(("init_done", None))
+        
+        # 游戏计数器
+        games_saved = 0
+        
+        # 主循环
+        while not stop_event.is_set():
+            # 处理命令队列中的命令
+            try:
+                # 非阻塞方式检查命令队列
+                cmd, data = cmd_queue.get(block=False)
+                
+                if cmd == "sample_batch":
+                    # 采样训练批次
+                    num_unroll_steps, batch_size = data
+                    batch = replay_buffer.sample_batch(num_unroll_steps, batch_size)
+                    result_queue.put(("batch", batch))
+                    
+                elif cmd == "update_priorities":
+                    # 更新优先级
+                    priorities, indices = data
+                    replay_buffer.update_priorities(priorities, indices)
+                    result_queue.put(("priorities_updated", None))
+                    
+                elif cmd == "get_buffer_size":
+                    # 获取缓冲区大小
+                    buffer_size = len(replay_buffer.buffer)
+                    result_queue.put(("buffer_size", buffer_size))
+                    
+                elif cmd == "close":
+                    # 关闭ReplayBuffer
+                    replay_buffer.close()
+                    result_queue.put(("closed", None))
+                    break
+                    
+            except mp.queues.Empty:
+                # 命令队列为空，继续检查游戏历史队列
+                pass
+            except Exception as e:
+                # 处理命令时出错
+                logger.error(f"处理命令时出错: {str(e)}")
+                result_queue.put(("error", str(e)))
+            
+            # 处理游戏历史队列中的游戏历史
+            try:
+                # 非阻塞方式从游戏历史队列获取游戏历史
+                game_history = game_history_queue.get(block=False)
+                
+                # 保存游戏历史
+                replay_buffer._save_game(game_history)
+                
+                games_saved += 1
+                if games_saved % 10 == 0:  # 每保存10局游戏记录一次日志
+                    logger.info(f"已保存 {games_saved} 局游戏，缓冲区大小: {len(replay_buffer.buffer)}")
+                    
+            except mp.queues.Empty:
+                # 游戏历史队列为空，短暂休眠避免CPU占用过高
+                time.sleep(0.01)
+            except Exception as e:
+                # 处理游戏历史时出错
+                logger.error(f"处理游戏历史时出错: {str(e)}")
+            
+        logger.info(f"ReplayBuffer进程结束，共保存 {games_saved} 局游戏")
+    
+    def save_game(self, game_history: GameHistory, shared_storage=None):
+        """
+        保存游戏历史到回放缓冲区
+        
+        Args:
+            game_history: GameHistory对象，包含游戏历史数据
+            shared_storage: SharedStorage对象，用于更新统计信息
+        """
+        # 将游戏历史发送到ReplayBuffer进程
+        self.game_history_queue.put(game_history)
+        
+        # 如果有共享存储，可以在主进程中直接更新统计信息
+        if shared_storage:
+            # 发送命令获取当前缓冲区大小
+            self.cmd_queue.put(("get_buffer_size", None))
+            cmd, buffer_size = self.result_queue.get()
+            
+            if cmd == "buffer_size":
+                # 更新统计信息
+                shared_storage.set_info("replay_buffer_size", buffer_size)
+    
+    def sample_batch(self, num_unroll_steps: int, batch_size: int) -> TrainingBatch:
+        """
+        从回放缓冲区采样训练批次
+        
+        Args:
+            num_unroll_steps: 展开步数
+            batch_size: 批次大小
+            
+        Returns:
+            batch: 包含训练数据的字典
+        """
+        # 发送采样命令到ReplayBuffer进程
+        self.cmd_queue.put(("sample_batch", (num_unroll_steps, batch_size)))
+        
+        # 等待结果
+        cmd, batch = self.result_queue.get()
+        
+        if cmd == "batch":
+            return batch
+        else:
+            raise RuntimeError(f"采样批次失败: {cmd}, {batch}")
+    
+    def update_priorities(self, priorities: np.ndarray, indices: List[Tuple[int, int]]):
+        """
+        更新优先级
+        
+        Args:
+            priorities: 新的优先级值
+            indices: 对应的索引 [(game_id, position)]
+        """
+        # 发送更新优先级命令到ReplayBuffer进程
+        self.cmd_queue.put(("update_priorities", (priorities, indices)))
+        
+        # 可以选择不等待结果，异步更新
+        # cmd, _ = self.result_queue.get()
+        # assert cmd == "priorities_updated", f"更新优先级失败: {cmd}"
+    
+    def close(self):
+        """
+        关闭ReplayBuffer进程
+        """
+        # 发送关闭命令
+        self.cmd_queue.put(("close", None))
+        
+        # 设置停止事件
+        self.stop_event.set()
+        
+        # 等待进程结束
+        self.process.join(timeout=5)
+        if self.process.is_alive():
+            print(f"ReplayBuffer进程未能正常结束，强制终止")
+            self.process.terminate()
