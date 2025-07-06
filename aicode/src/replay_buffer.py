@@ -5,6 +5,9 @@ import copy
 import threading
 import concurrent.futures
 from dataclasses import dataclass
+import multiprocessing as mp  # 添加此行
+import logging                # 添加此行（如果缺失）
+import time                   # 添加此行（如果缺失）
 
 from structures import GameHistory, TrainingBatch
 from config import MuZeroConfig
@@ -448,7 +451,7 @@ class ReplayBufferProcess:
             format="ReplayBuffer %(asctime)s [%(levelname)s] %(message)s",
             handlers=[
                 logging.StreamHandler(),
-                logging.FileHandler(f"replay_buffer_{time.strftime('%Y%m%d_%H%M%S')}.log")
+                logging.FileHandler(f"logs/replay_buffer_{time.strftime('%Y%m%d_%H%M%S')}.log")
             ]
         )
         logger = logging.getLogger("replay_buffer")

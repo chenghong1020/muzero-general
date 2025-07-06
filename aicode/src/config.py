@@ -60,6 +60,8 @@ class MuZeroConfig:
                  replay_buffer_size: int = 100000,         # 回放缓冲区大小
                  checkpoint_interval: int = 1000,          # 模型保存间隔
                  games_per_evaluation: int = 10,           # 每次评估运行的游戏局数
+                 self_play_delay: float = 0.0,             # 自我对弈 actor 每次游戏后的延迟时间（秒）
+                 max_moves: int = 1000,                    # 每局游戏的最大步数
 
                  # --- 存储相关 ---
                  results_path: str = "./results",          # 结果保存路径
@@ -118,6 +120,8 @@ class MuZeroConfig:
         self.replay_buffer_size = replay_buffer_size
         self.checkpoint_interval = checkpoint_interval
         self.games_per_evaluation = games_per_evaluation
+        self.self_play_delay = self_play_delay
+        self.max_moves = max_moves
 
         # --- 存储 ---
         self.results_path = results_path
@@ -297,7 +301,18 @@ def get_game_config(game_name: str, config_overrides: Dict[str, Any] = None) -> 
 
 # 注册内置游戏
 from game import TicTacToeGame
-register_game('tictactoe', TicTacToeGame)
+
+# 为 TicTacToe 创建默认配置
+tictactoe_default_config = MuZeroConfig(
+    action_space_size=9,
+    observation_shape=(2, 3, 3), # 假设 (棋盘状态, 玩家信息)
+    is_two_player_game=True,
+    # 根据需要填充其他 TicTacToe 特定参数
+    # 例如，对于棋盘游戏，discount 通常为 1.0
+    discount=1.0,
+    support_size=1 # 奖励通常是 -1, 0, 1
+)
+register_game('tictactoe', TicTacToeGame, tictactoe_default_config)
 
 # 可以在这里添加一个主函数入口或者测试代码来验证配置类的使用
 if __name__ == '__main__':

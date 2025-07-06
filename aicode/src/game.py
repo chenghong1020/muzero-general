@@ -213,6 +213,13 @@ class TicTacToeGame(Game):
     def close(self) -> None:
         pass # 对于简单环境，可能不需要特殊清理
 
+    def terminal(self) -> bool:
+        """检查当前游戏状态是否为终止状态
+        Returns:
+            bool: 如果游戏已结束（有赢家或平局）则返回 True，否则返回 False
+        """
+        return self._check_termination()
+
 # 可以在这里添加一些简单的测试代码
 if __name__ == '__main__':
     game = TicTacToeGame()

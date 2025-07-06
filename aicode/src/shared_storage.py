@@ -1,14 +1,18 @@
 import copy
 import os
-import threading
+from multiprocessing import Manager
 import time
-from typing import Dict, List, Any, Union, Optional
+from typing import Dict, List, Any, Union, Optional, Callable
 import types
 
 import torch
 
 from config import MuZeroConfig
+from multiprocessing.managers import BaseManager
+from multiprocessing import RLock  # 添加 RLock 导入
 
+# Removed SharedStorageManager = Manager()
+# Removed SharedStorageManager.register("SharedStorage", SharedStorage)
 
 class SharedStorage:
     """
@@ -16,18 +20,19 @@ class SharedStorage:
     它作为训练器和自博弈 Actor 之间的桥梁，确保所有组件能够访问到最新的模型和训练数据。
     """
 
-    def __init__(self, checkpoint: Dict, config: MuZeroConfig):
+    def __init__(self, checkpoint: Dict, config: MuZeroConfig, lock: Any):
         """
         初始化共享存储。
         
         参数:
             checkpoint: 包含初始网络权重和统计信息的字典
             config: MuZero配置对象
+            lock: 用于同步访问的锁对象
         """
         self.config = config
         self._checkpoint = copy.deepcopy(checkpoint)
         self._model_version = 0
-        self._lock = threading.RLock()  # 使用可重入锁保证线程安全
+        self._lock = lock
         
     def save_checkpoint(self, path: Optional[str] = None) -> str:
         """
@@ -128,15 +133,30 @@ class SharedStorage:
                 self._checkpoint["info"] = {}
             return types.MappingProxyType(self._checkpoint["info"])
     
-    def set_info(self, info: Dict[str, Any]) -> None:
+    def set_info(self, key: str, value: Any) -> None:
         """
-        更新所有统计信息。
+        设置单个统计信息。
         
         参数:
-            info: 包含所有统计信息的字典
+            key: 信息键
+            value: 信息值
         """
         with self._lock:
-            self._checkpoint["info"] = copy.deepcopy(info)
+            if "info" not in self._checkpoint:
+                self._checkpoint["info"] = {}
+            self._checkpoint["info"][key] = value
+    
+    def update_info(self, update_dict: Dict[str, Any]) -> None:
+        """
+        批量更新多个统计信息。
+        
+        参数:
+            update_dict: 包含要更新的键值对的字典
+        """
+        with self._lock:
+            if "info" not in self._checkpoint:
+                self._checkpoint["info"] = {}
+            self._checkpoint["info"].update(update_dict)
 
     def atomic_update_info(self, update_fn: Callable[[Dict], Dict]) -> None:
         """
@@ -149,6 +169,16 @@ class SharedStorage:
             current_info = copy.deepcopy(self._checkpoint.get("info", {}))
             updated_info = update_fn(current_info)
             self._checkpoint["info"] = updated_info
+    
+    def get_training_step(self) -> int:
+        """
+        获取当前训练步数。
+        
+        返回:
+            当前训练步数
+        """
+        with self._lock:
+            return self._checkpoint.get("info", {}).get("training_step", 0)
     
     def wait_for_training_step(self, target_step: int, timeout: Optional[float] = None) -> int:
         """
@@ -166,14 +196,26 @@ class SharedStorage:
         start_time = time.time()
         while True:
             with self._lock:
-                current_step = self._checkpoint["info"].get("training_step", 0)
+                current_step = self._checkpoint.get("info", {}).get("training_step", 0)
                 if current_step >= target_step:
                     return current_step
             
             # 检查是否超时
             if timeout is not None and time.time() - start_time > timeout:
                 with self._lock:
-                    return self._checkpoint["info"].get("training_step", 0)
+                    return self._checkpoint.get("info", {}).get("training_step", 0)
             
             # 短暂休眠，避免忙等待
             time.sleep(0.1)
+
+# 创建自定义 Manager 子类并显式注册所需组件
+class SharedStorageManager(BaseManager):
+    pass
+# 注册共享存储类和同步原语
+SharedStorageManager.register('SharedStorage', SharedStorage)
+SharedStorageManager.register('RLock', RLock)  # 注册 RLock
+
+def init_share_storage_proxy(manager: SharedStorageManager, checkpoint: Dict, config: MuZeroConfig):
+    # 使用自定义 Manager 注册，确保类路径可解析
+    lock = manager.RLock()
+    return manager.SharedStorage(checkpoint, config, lock)

@@ -14,10 +14,10 @@ from model import MuZeroNetwork
 from mcts import MCTSFacade, Node, select_action
 from structures import GameHistory
 from shared_storage import SharedStorage
-from replay_buffer import ReplayBuffer
+from replay_buffer import ReplayBufferProcess
 
 
-def run_selfplay(config: MuZeroConfig, shared_storage: SharedStorage, replay_buffer: ReplayBufferProcess):
+def run_selfplay(config: MuZeroConfig, shared_storage_proxy, replay_buffer: ReplayBufferProcess):
     """
     自我对弈主循环，负责初始化和管理整个自我对弈过程，协调多个并行的游戏对弈 Actor。
     
@@ -32,8 +32,9 @@ def run_selfplay(config: MuZeroConfig, shared_storage: SharedStorage, replay_buf
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(f"selfplay_{time.strftime('%Y%m%d_%H%M%S')}.log")
-        ]
+            logging.FileHandler(f"logs/selfplay_{time.strftime('%Y%m%d_%H%M%S')}.log")
+        ],
+        
     )
     logger = logging.getLogger("selfplay")
     
@@ -52,7 +53,7 @@ def run_selfplay(config: MuZeroConfig, shared_storage: SharedStorage, replay_buf
     for actor_id in range(num_actors):
         process = mp.Process(
             target=play_game_actor,
-            args=(actor_id, config, shared_storage, game_history_queue, stop_event),
+            args=(actor_id, config, shared_storage_proxy, game_history_queue, stop_event),
             daemon=True
         )
         process.start()
@@ -68,7 +69,7 @@ def run_selfplay(config: MuZeroConfig, shared_storage: SharedStorage, replay_buf
                 game_history = game_history_queue.get(timeout=0.1)
                 
                 # 将游戏历史发送到回放缓冲区进程
-                replay_buffer.save_game(game_history, shared_storage)
+                replay_buffer.save_game(game_history, shared_storage_proxy) # Corrected to use shared_storage_proxy
                 
                 games_collected += 1
                 if games_collected % 10 == 0:  # 每收集 10 局游戏记录一次日志
@@ -101,15 +102,15 @@ def run_selfplay(config: MuZeroConfig, shared_storage: SharedStorage, replay_buf
         logger.info(f"自我对弈结束，共收集 {games_collected} 局游戏")
 
 
-def play_game_actor(actor_id: int, config: MuZeroConfig, shared_storage: SharedStorage,  # 参数改回config
+def play_game_actor(actor_id: int, config: MuZeroConfig, shared_storage_proxy, 
                    game_history_queue: mp.Queue, stop_event: mp.Event):
     """
     游戏对弈 Actor，在独立进程中运行，负责进行一局或多局完整的游戏。
     
     Args:
         actor_id: Actor 的唯一标识符。
-        game_name: 游戏名称。
-        shared_storage: 共享存储实例，用于获取最新的网络权重。
+        config: MuZero 配置。
+        shared_storage_proxy: 共享存储代理实例，用于获取最新的网络权重。
         game_history_queue: 用于发送完成的游戏历史到主进程的队列。
         stop_event: 用于接收停止信号的事件。
     """
@@ -130,12 +131,11 @@ def play_game_actor(actor_id: int, config: MuZeroConfig, shared_storage: SharedS
     torch.manual_seed(seed)
     
     # 创建游戏环境 
-    # 直接使用config中的游戏配置（新增）
-    game_class = config.game_class  # 假设config已包含game_class属性
+    game_class = config.game_class
     game = game_class(seed)
     
-    # 创建模型实例（使用传入的config）
-    model = MuZeroNetwork(config)  # 改回使用config
+    # 创建模型实例
+    model = MuZeroNetwork(config)
     
     # 游戏计数器
     games_played = 0
@@ -144,19 +144,19 @@ def play_game_actor(actor_id: int, config: MuZeroConfig, shared_storage: SharedS
     while not stop_event.is_set():
         try:
             # 从共享存储获取最新的网络权重
-            weights = shared_storage.get_weights()
+            weights = shared_storage_proxy.get_weights()
             model.set_weights(weights)
             
             # 可选：等待训练器完成一定步数的训练
             if hasattr(config, 'wait_for_training_step') and config.wait_for_training_step > 0:
-                current_step = shared_storage.get_training_step()
+                current_step = shared_storage_proxy.get_training_step()
                 if current_step < config.wait_for_training_step:
                     logger.info(f"等待训练步数达到 {config.wait_for_training_step}，当前: {current_step}")
                     time.sleep(1)
                     continue
             
             # 进行一局游戏
-            game_history = play_game(config, model, game, shared_storage)
+            game_history = play_game(config, model, game, shared_storage_proxy)
             
             # 将游戏历史发送到主进程
             game_history_queue.put(game_history)
@@ -209,16 +209,19 @@ def play_game(config: MuZeroConfig, model: MuZeroNetwork, game: Game,
     
     with torch.no_grad():  # 禁用梯度计算以提高性能
         while not terminated and len(game_history.action_history) <= max_moves:
-            # 执行 MCTS 搜索
-            root, extra_info = mcts_facade.run()
+            # 获取堆叠后的观测
+            stacked_observation = game_history.get_stacked_observations(
+                index=len(game_history.observation_history) - 1,
+                num_stacked_observations=config.stacked_observations
+                # 移除多余的 action_history 和 to_play 参数
+            )
             
-            # 根据温度参数选择动作
-            # 获取当前游戏步数
-            num_moves = len(game_history.action_history) - 1  # 减去初始的无动作
-            
-            # 选择动作
-            action = select_action(config, num_moves, root, training=True)
-            
+            # 执行MCTS搜索并选择动作
+            action, root = mcts_facade.search_and_play(
+                training=True,
+                stacked_observation=stacked_observation
+            )
+    
             # 执行动作
             observation, reward, terminated, next_player = game.step(action)
             
@@ -228,9 +231,12 @@ def play_game(config: MuZeroConfig, model: MuZeroNetwork, game: Game,
             game_history.store_search_statistics(root.value(), child_visits)
             
             # 存储游戏步骤信息
-            game_history.observation_history.append(observation)
-            game_history.action_history.append(action)
-            game_history.reward_history.append(reward)
+            game_history.append_step(
+                observation=observation,
+                action=action,
+                reward=reward,
+                next_player=next_player
+            )
             game_history.to_play_history.append(next_player)
             
             # 记录 MCTS 统计信息（用于调试）

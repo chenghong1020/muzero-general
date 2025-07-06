@@ -374,12 +374,13 @@ class MCTSFacade:
         self.model = model
         self.game = game
     
-    def run(self, override_root_with=None) -> tuple:
+    def run(self, override_root_with=None, stacked_observation=None) -> tuple:
         """
         执行 MCTS 搜索。
         
         Args:
             override_root_with: (可选) 用于从外部提供根节点信息。
+            stacked_observation: (可选) 堆叠后的观测值，优先使用
         
         Returns:
             tuple: (搜索后的根节点, 额外信息)
@@ -387,8 +388,8 @@ class MCTSFacade:
         # 创建根节点
         root = Node(prior=1.0, to_play=self.game.to_play())
         
-        # 从游戏环境获取当前状态
-        observation = self.game.get_observation()
+        # 使用传入的堆叠观测或从游戏获取当前状态
+        observation = stacked_observation
         legal_actions = self.game.legal_actions()
         to_play = self.game.to_play()
         
@@ -424,7 +425,7 @@ class MCTSFacade:
         
         return select_action(self.config, num_moves, root, training)
     
-    def search_and_play(self, training: bool = True) -> tuple:
+    def search_and_play(self, training: bool = True, stacked_observation=None) -> tuple:
         """
         执行完整的搜索并选择动作。
         
@@ -434,8 +435,8 @@ class MCTSFacade:
         Returns:
             tuple: (选择的动作, 搜索树根节点)
         """
-        # 执行搜索
-        root, extra_info = self.run()
+        # 执行搜索时使用传入的堆叠观测
+        root, extra_info = self.run(stacked_observation=stacked_observation)
         
         # 选择动作
         action = self.select_action(root, training=training)

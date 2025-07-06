@@ -60,12 +60,43 @@ class GameHistory:
         # 如果原始是 (H, W, C)，堆叠后是 (H, W, num_stacked * C)
         # 这里假设是 (C, H, W)
         # 注意：实际堆叠方式取决于网络输入要求
-        if len(observations[0].shape) == 3 and observations[0].shape[0] < observations[0].shape[1]: # (C, H, W)
+        if len(observations[0].shape) == 3 and observations[0].shape[0] < observations[0].shape[1]:  # (C, H, W)
+            # 拼接观测通道
             stacked_obs = np.concatenate(observations, axis=0)
-        elif len(observations[0].shape) == 3: # (H, W, C)
+            
+            # 添加动作编码通道
+            H, W = observations[0].shape[1], observations[0].shape[2]
+            action_planes = []
+            for i in range(1, num_stacked_observations + 1):
+                action_index = index - i
+                # 获取动作，如果索引越界则使用0
+                if 0 <= action_index < len(self.action_history):
+                    action = self.action_history[action_index]
+                else:
+                    action = 0
+                
+                # 将动作值编码到平面中（使用动作值填充整个平面）
+                # 数据类型与观测保持一致，确保数值稳定性
+                # 生成动作平面 (修改部分)
+                for action in reversed(actions):
+                    # 创建零矩阵作为动作平面
+                    plane = np.zeros(observation_shape, dtype=np.float32)
+                    # 将动作对应位置设为1 (假设动作值对应H*W网格中的索引)
+                    # 将一维动作索引转换为H*W网格坐标
+                    h, w = observation_shape[1], observation_shape[2]
+                    row = action // w
+                    col = action % w
+                    if row < h and col < w:
+                        plane[0, row, col] = 1.0  # 假设通道维度为第一个维度
+                    action_planes.append(plane)
+                
+            if action_planes:
+                stacked_actions = np.concatenate(action_planes, axis=0)
+                stacked_obs = np.concatenate([stacked_obs, stacked_actions], axis=0)
+        elif len(observations[0].shape) == 3:  # (H, W, C)
             stacked_obs = np.concatenate(observations, axis=2)
-        else: # 其他情况，例如 1D 或 2D 状态
-            stacked_obs = np.stack(observations, axis=0) # 简单堆叠
+        else:  # 其他情况，例如 1D 或 2D 状态
+            stacked_obs = np.stack(observations, axis=0)  # 简单堆叠
 
         return stacked_obs
 
@@ -132,3 +163,10 @@ class TrainingBatch:
     gradient_scale_batch: Optional[torch.Tensor] = None # [batch_size, num_unroll_steps + 1]
     # 可选：用于掩码损失的有效步数标记
     mask_batch: Optional[torch.Tensor] = None # [batch_size, num_unroll_steps + 1]
+
+    def append_step(self, observation: np.ndarray, action: int, reward: float, next_player: int):
+        """封装单步游戏信息的存储逻辑"""
+        self.observation_history.append(observation)
+        self.action_history.append(action)
+        self.reward_history.append(reward)
+        self.to_play_history.append(next_player)
