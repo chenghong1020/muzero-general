@@ -195,10 +195,12 @@ def play_game(config: MuZeroConfig, model: MuZeroNetwork, game: Game,
     game_history = GameHistory(config=config)
     
     # 记录初始状态
-    game_history.observation_history.append(observation)
-    game_history.action_history.append(0)  # 初始动作设为 0（无动作）
-    game_history.reward_history.append(0.0)  # 初始奖励设为 0
-    game_history.to_play_history.append(game.to_play())
+    game_history.append_step(
+        observation=observation,
+        action=0,  # 初始动作设为 0（无动作）
+        reward=0.0,  # 初始奖励设为 0
+        next_player=game.to_play()
+    )
     
     # 创建 MCTS Facade
     mcts_facade = MCTSFacade(config, model, game)

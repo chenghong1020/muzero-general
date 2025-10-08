@@ -44,9 +44,9 @@ class GameHistory:
 
         # 获取当前及之前的观测帧
         observations = [self.observation_history[index]]
-        for i in range(1, num_stacked_observations):
-            if index - i >= 0:
-                observations.insert(0, self.observation_history[index - i])
+        for i in range(num_stacked_observations):
+            if index - 1 - i >= 0:
+                observations.insert(0, self.observation_history[index -1 - i])
             else:
                 # 在游戏开始时，用零填充或复制第一帧进行填充
                 # 这里使用零填充 (假设 observation 是 numpy array)
@@ -67,7 +67,7 @@ class GameHistory:
             # 添加动作编码通道
             H, W = observations[0].shape[1], observations[0].shape[2]
             action_planes = []
-            for i in range(1, num_stacked_observations + 1):
+            for i in range(num_stacked_observations):
                 action_index = index - i
                 # 获取动作，如果索引越界则使用0
                 if 0 <= action_index < len(self.action_history):
@@ -137,6 +137,13 @@ class GameHistory:
     def __len__(self):
         # 游戏历史的长度定义为采取的动作数量
         return len(self.action_history)
+
+    def append_step(self, observation: np.ndarray, action: int, reward: float, next_player: int):
+        """封装单步游戏信息的存储逻辑"""
+        self.observation_history.append(observation)
+        self.action_history.append(action)
+        self.reward_history.append(reward)
+        self.to_play_history.append(next_player)
 
 
 @dataclass
